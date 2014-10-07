@@ -86,6 +86,7 @@ libtapdisk_la_SOURCES += block-vindex.c
 libtapdisk_la_SOURCES += block-lcache.c
 libtapdisk_la_SOURCES += block-llcache.c
 libtapdisk_la_SOURCES += block-nbd.c
+libtapdisk_la_SOURCES += block-nbd.h
 
 # shared ring
 libtapdisk_la_SOURCES += td-blkif.c

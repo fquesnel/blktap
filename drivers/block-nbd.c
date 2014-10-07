@@ -21,21 +21,17 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
-#include "tapdisk.h"
 #include "tapdisk-server.h"
-#include "tapdisk-driver.h"
 #include "tapdisk-interface.h"
 #include "tapdisk-utils.h"
 #include "tapdisk-fdreceiver.h"
-#include "tapdisk-nbd.h"
+#include "block-nbd.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -47,7 +43,6 @@
 #define N_PASSED_FDS 10
 #define TAPDISK_NBDCLIENT_MAX_PATH_LEN 256
 
-#define MAX_NBD_REQS TAPDISK_DATA_REQUESTS
 #define NBD_TIMEOUT 30
 
 /*
@@ -63,52 +58,6 @@ struct tdnbd_passed_fd {
 	struct                  timeval t;
 	int                     fd;
 } passed_fds[N_PASSED_FDS];
-
-struct nbd_queued_io {
-	char                   *buffer;
-	int                     len;
-	int                     so_far;
-};
-
-struct td_nbd_request {
-	td_request_t            treq;
-	struct nbd_request      nreq;
-	int                     timeout_event;
-	int                     fake;
-	struct nbd_queued_io    header;
-	struct nbd_queued_io    body;     /* in or out, depending on whether
-					     type is read or write. */
-	struct list_head        queue;
-};
-
-struct tdnbd_data
-{
-	int                     writer_event_id;
-	struct list_head        sent_reqs;
-	struct list_head        pending_reqs;
-	struct list_head        free_reqs;
-	struct td_nbd_request   requests[MAX_NBD_REQS];
-	int                     nr_free_count;
-
-	int                     reader_event_id;
-	struct nbd_reply        current_reply;
-	struct nbd_queued_io    cur_reply_qio;
-	struct td_nbd_request  *curr_reply_req;
-
-	int                     socket;
-	/*
-	 * TODO tapdisk can talk to an Internet socket or a UNIX domain socket.
-	 * Try to group struct members accordingly e.g. in a union.
-	 */
-	struct sockaddr_in     *remote;
-	struct sockaddr_un      remote_un;
-	char                   *peer_ip;
-	int                     port;
-	char                   *name;
-
-	int                     flags;
-	int                     closed;
-};
 
 int global_id = 0;
 
@@ -867,7 +816,7 @@ tdnbd_close(td_driver_t* driver)
 	return 0;
 }
 
-static void
+void
 tdnbd_queue_read(td_driver_t* driver, td_request_t treq)
 {
 	struct tdnbd_data *prv = (struct tdnbd_data *)driver->data;
@@ -881,7 +830,7 @@ tdnbd_queue_read(td_driver_t* driver, td_request_t treq)
 				treq, 0);
 }
 
-static void
+void
 tdnbd_queue_write(td_driver_t* driver, td_request_t treq)
 {
 	struct tdnbd_data *prv = (struct tdnbd_data *)driver->data;

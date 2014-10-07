@@ -16,6 +16,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
+#ifndef __TAPDISK_FDRECEIVER_H__
+#define __TAPDISK_FDRECEIVER_H__
 typedef void (*fd_cb_t) (int fd, char *msg, void *data);
 
 struct td_fdreceiver *td_fdreceiver_start(char *path, fd_cb_t, void *data);
@@ -33,3 +35,4 @@ struct td_fdreceiver {
 	fd_cb_t callback;
 	void *callback_data;
 };
+#endif
