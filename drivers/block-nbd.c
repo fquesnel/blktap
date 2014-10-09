@@ -820,8 +820,8 @@ void
 tdnbd_queue_read(td_driver_t* driver, td_request_t treq)
 {
 	struct tdnbd_data *prv = (struct tdnbd_data *)driver->data;
-	int      size    = treq.secs * driver->info.sector_size;
-	uint64_t offset  = treq.sec * (uint64_t)driver->info.sector_size;
+	int      size    = treq.secs * SECTOR_SIZE;
+	uint64_t offset  = treq.sec * (uint64_t)SECTOR_SIZE;
 
 	if (prv->flags & TD_OPEN_SECONDARY)
 		td_forward_request(treq);
@@ -834,8 +834,8 @@ void
 tdnbd_queue_write(td_driver_t* driver, td_request_t treq)
 {
 	struct tdnbd_data *prv = (struct tdnbd_data *)driver->data;
-	int      size    = treq.secs * driver->info.sector_size;
-	uint64_t offset  = treq.sec * (uint64_t)driver->info.sector_size;
+	int      size    = treq.secs * SECTOR_SIZE;
+	uint64_t offset  = treq.sec * (uint64_t)SECTOR_SIZE;
 
 	tdnbd_queue_request(prv, NBD_CMD_WRITE,
 			offset, treq.buf, size, treq, 0);
