@@ -55,12 +55,11 @@
 #include <limits.h>
 
 #include "debug.h"
-#include "libvhd.h"
-#include "tapdisk.h"
 #include "tapdisk-driver.h"
 #include "tapdisk-interface.h"
 #include "tapdisk-disktype.h"
 #include "tapdisk-storage.h"
+#include "block-vhd.h"
 
 unsigned int SPB;
 
@@ -94,9 +93,6 @@ unsigned int SPB;
 #endif
 
 /******VHD DEFINES******/
-#define VHD_CACHE_SIZE               32
-
-#define VHD_REQS_DATA                TAPDISK_DATA_REQUESTS
 #define VHD_REQS_META                (VHD_CACHE_SIZE + 2)
 #define VHD_REQS_TOTAL               (VHD_REQS_DATA + VHD_REQS_META)
 
@@ -140,122 +136,12 @@ unsigned int SPB;
 #define VHD_FLAG_TX_LIVE             1
 #define VHD_FLAG_TX_UPDATE_BAT       2
 
-typedef uint8_t vhd_flag_t;
-
-struct vhd_state;
-struct vhd_request;
-
-struct vhd_req_list {
-	struct vhd_request       *head;
-	struct vhd_request       *tail;
-};
-
-struct vhd_transaction {
-	int                       error;
-	int                       closed;
-	int                       started;
-	int                       finished;
-	vhd_flag_t                status;
-	struct vhd_req_list       requests;
-};
-
-struct vhd_request {
-	int                       error;
-	uint8_t                   op;
-	vhd_flag_t                flags;
-	td_request_t              treq;
-	struct tiocb              tiocb;
-	struct vhd_state         *state;
-	struct vhd_request       *next;
-	struct vhd_transaction   *tx;
-};
-
-struct vhd_bat_state {
-	vhd_bat_t                 bat;
-	vhd_batmap_t              batmap;
-	vhd_flag_t                status;
-	uint32_t                  pbw_blk;     /* blk num of pending write */
-	uint64_t                  pbw_offset;  /* file offset of same */
-	struct vhd_request        req;         /* for writing bat table */
-	struct vhd_request        zero_req;    /* for initializing bitmaps */
-	char                     *bat_buf;
-};
-
-struct vhd_bitmap {
-	uint32_t                  blk;
-	uint64_t                  seqno;       /* lru sequence number */
-	vhd_flag_t                status;
-
-	char                     *map;         /* map should only be modified
-					        * in finish_bitmap_write */
-	char                     *shadow;      /* in-memory bitmap changes are 
-					        * made to shadow and copied to
-					        * map only after having been
-					        * flushed to disk */
-	struct vhd_transaction    tx;          /* transaction data structure
-						* encapsulating data, bitmap, 
-						* and bat writes */
-	struct vhd_req_list       queue;       /* data writes waiting for next
-						* transaction */
-	struct vhd_req_list       waiting;     /* pending requests that cannot
-					        * be serviced until this bitmap
-					        * is read from disk */
-	struct vhd_request        req;
-};
-
-struct vhd_state {
-	vhd_flag_t                flags;
-
-        /* VHD stuff */
-	vhd_context_t             vhd;
-	uint32_t                  spp;         /* sectors per page */
-	uint32_t                  spb;         /* sectors per block */
-	uint64_t                  first_db;    /* pointer to datablock 0 */
-
-	/**
-	 * Pointer to the next (unallocated) datablock. If greater than UINT_MAX,
-	 * there are no more blocks available.
-	 */
-	uint64_t                  next_db;
-
-	struct vhd_bat_state      bat;
-
-	uint64_t                  bm_lru;      /* lru sequence number */
-	uint32_t                  bm_secs;     /* size of bitmap, in sectors */
-	struct vhd_bitmap        *bitmap[VHD_CACHE_SIZE];
-
-	int                       bm_free_count;
-	struct vhd_bitmap        *bitmap_free[VHD_CACHE_SIZE];
-	struct vhd_bitmap         bitmap_list[VHD_CACHE_SIZE];
-
-	int                       vreq_free_count;
-	struct vhd_request       *vreq_free[VHD_REQS_DATA];
-	struct vhd_request        vreq_list[VHD_REQS_DATA];
-
-	/* for redundant bitmap writes */
-	int                       padbm_size;
-	char                     *padbm_buf;
-	long int                  debug_skipped_redundant_writes;
-	long int                  debug_done_redundant_writes;
-
-	td_driver_t              *driver;
-
-	uint64_t                  queued;
-	uint64_t                  completed;
-	uint64_t                  returned;
-	uint64_t                  reads;
-	uint64_t                  read_size;
-	uint64_t                  writes;
-	uint64_t                  write_size;
-};
-
 #define test_vhd_flag(word, flag)  ((word) & (flag))
 #define set_vhd_flag(word, flag)   ((word) |= (flag))
 #define clear_vhd_flag(word, flag) ((word) &= ~(flag))
 
 #define bat_entry(s, blk)          ((s)->bat.bat.bat[(blk)])
 
-static void vhd_complete(void *, struct tiocb *, int);
 static void finish_data_transaction(struct vhd_state *, struct vhd_bitmap *);
 
 static struct vhd_state  *_vhd_master;
@@ -1275,7 +1161,7 @@ read_bitmap_cache_span(struct vhd_state *s,
 	return ret;
 }
 
-static inline struct vhd_request *
+inline struct vhd_request *
 alloc_vhd_request(struct vhd_state *s)
 {
 	struct vhd_request *req = NULL;
@@ -1297,7 +1183,7 @@ free_vhd_request(struct vhd_state *s, struct vhd_request *req)
 	s->vreq_free[s->vreq_free_count++] = req;
 }
 
-static inline void
+inline void
 aio_read(struct vhd_state *s, struct vhd_request *req, uint64_t offset)
 {
 	struct tiocb *tiocb = &req->tiocb;
@@ -1313,7 +1199,7 @@ aio_read(struct vhd_state *s, struct vhd_request *req, uint64_t offset)
 	TRACE(s);
 }
 
-static inline void
+inline void
 aio_write(struct vhd_state *s, struct vhd_request *req, uint64_t offset)
 {
 	struct tiocb *tiocb = &req->tiocb;
@@ -1579,7 +1465,7 @@ allocate_block(struct vhd_state *s, uint32_t blk)
 	return 0;
 }
 
-static int 
+int
 schedule_data_read(struct vhd_state *s, td_request_t treq, vhd_flag_t flags)
 {
 	uint64_t offset;
