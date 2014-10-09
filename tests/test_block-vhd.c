@@ -83,3 +83,41 @@ void test_aio_write_computes_size_correctly(void)
     aio_write(&s, &req, offset);
 }
 
+void test_schedule_data_read_sets_offset_correctly_w_footer_HD_TYPE_FIXED(void)
+{
+    // Initialisation
+    struct vhd_state s;
+    td_request_t treq;
+    vhd_flag_t flags;
+    struct vhd_request *req;
+    int expected_size;
+    uint64_t expected_offset;
+
+    treq.secs = 10;
+    treq.sec = 1024;
+
+    s.vhd.footer.type = HD_TYPE_FIXED;
+    s.vreq_free_count = 1;
+    s.vreq_free[0] = &(struct vhd_request){};
+    req = s.vreq_free[0];
+
+    // Expectations
+    expected_size = treq.secs * SECTOR_SIZE;
+    expected_offset = treq.sec * (uint64_t) SECTOR_SIZE;
+
+    td_prep_read_Expect(
+        &req->tiocb,
+        s.vhd.fd,
+        req->treq.buf,
+        expected_size,
+        expected_offset,
+        vhd_complete,
+        req);
+
+    td_queue_tiocb_Ignore();
+
+    __tlog_write_Ignore();
+
+    // Call to the method to test
+    schedule_data_read(&s, treq, flags);
+}
